@@ -143,7 +143,7 @@ heading angle: psi = atan(p_y / p_x)
 
 L_G = BCE(D(G(z)), 1)
     + MSE(H(G(z)), 0)
-    + MSE(psi(G(z)), theta(G(z)))
+    + MSE(psi(G(z)), psi(x_real))
 ```
 
 The discriminator in both ZGAN variants operates on the first 50 features only, same as SGAN.
