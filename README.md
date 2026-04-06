@@ -6,7 +6,7 @@
 
 ## What this is
 
-This project applies generative models to three optimal control problems where real training trajectories are expensive to compute. Each model learns the distribution of those trajectories and generates new synthetic ones that can augment the RL training pipeline.
+This project applies generative models to three optimal control problems where real training trajectories are expensive to compute. Each model learns the distribution of those trajectories and generates new synthetic ones.
 
 Eight scripts are included across three problem domains:
 
