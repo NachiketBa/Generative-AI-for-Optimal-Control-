@@ -178,24 +178,6 @@ The discriminator in both ZGAN variants operates on the first 50 features only, 
 | `batch_size` | 64 | 64 | 64 |
 | Optimizer | SGD (lr=0.01) | SGD (lr=0.01) | SGD (lr=0.01) |
 | Physics loss | none | MSE(H, 0) | MSE(H, 0) + MSE(psi, theta) |
-
----
-
-
-## Design notes
-
-**LayerNorm in LTI VAEs only.** The LTI dataset has only 500 training samples, making batch statistics unreliable. LayerNorm normalizes per sample so it stays stable at any batch size. The Minthreat and Zermelo models use plain ReLU stacks, where the larger datasets make this unnecessary.
-
-**Split-VAE regularization weights differ by problem.** The penalty on z1 for noiseless samples is 1 for LTI and 5 for Minthreat, because the signal-to-noise characteristics differ between the two domains. Higher lambda pushes the noiseless encoder more aggressively toward zero in z1.
-
-**Hamiltonian weight of 3 in Z-VAE.** The reconstruction and KL losses dominate early in training. Weighting the physics term at 3x compensates for its smaller raw magnitude and keeps it from being crowded out by the other two terms.
-
-**Discriminator sees only first 50 features in GANs.** The full 175-dim Zermelo trajectory includes states, costates, and heading angles. The discriminator operates on position and heading states only (columns 0-49), which are the most directly observable. Physics constraints on the remaining features are handled through the generator loss terms instead.
-
-**SGD for GAN training.** Adam can cause mode collapse in GANs on small datasets. SGD with lr=0.01 trains more slowly but produces more stable convergence for these trajectory distributions.
-
-**Best-checkpoint saving in VAE scripts.** The Minthreat S-VAE and all Zermelo VAEs track the lowest training loss and save that checkpoint. Generated samples come from the best checkpoint, not the final epoch.
-
 ---
 
 
