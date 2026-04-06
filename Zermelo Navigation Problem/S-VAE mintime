@@ -1,0 +1,123 @@
+#This program implements the S-VAE for the Zermelo Navigation problem
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import numpy as np
+import pandas as pd
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+torch.manual_seed(42)
+# Hyperparameters
+hidden_sizes_encoder = [324, 225, 196, 125, 100, 81]
+hidden_sizes_decoder = [81, 100, 125, 196, 225, 324]
+latent_size = 32
+learning_rate = 1e-3
+epochs = 2000
+n_features = 400
+n_discretization = 25
+batch_size = 32
+num_generated_samples = 1000  # Number of samples to generate
+
+
+class VAE(nn.Module):
+    def __init__(self):
+        super(VAE, self).__init__()
+        # Encoder
+        encoder_layers = []
+        input_size = n_features
+        for hidden_size in hidden_sizes_encoder:
+            encoder_layers.extend([nn.Linear(input_size, hidden_size), nn.ReLU()])
+            input_size = hidden_size
+        encoder_layers.append(nn.Linear(hidden_sizes_encoder[-1], latent_size * 2))
+        self.encoder = nn.Sequential(*encoder_layers)
+
+        # Decoder
+        decoder_layers = []
+        input_size = latent_size
+        for hidden_size in hidden_sizes_decoder:
+            decoder_layers.extend([nn.Linear(input_size, hidden_size), nn.ReLU()])
+            input_size = hidden_size
+        decoder_layers.append(nn.Linear(hidden_sizes_decoder[-1], n_features))
+        self.decoder = nn.Sequential(*decoder_layers)
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        # Encode
+        latent_params = self.encoder(x)
+        mu, logvar = torch.chunk(latent_params, 2, dim=1)
+        z = self.reparameterize(mu, logvar)
+
+        # Decode
+        x_recon = self.decoder(z)
+        return x_recon, mu, logvar
+
+
+def loss_function(x_recon, x, mu, logvar):
+    recon_loss = nn.MSELoss(reduction='sum')(x_recon, x)
+    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    return recon_loss + kl_loss
+
+
+def main():
+    vae = VAE().to(device)
+    optimizer = optim.Adam(vae.parameters(), lr=learning_rate)
+
+    # Load data
+    data_path = Path("C:/Users/nubapat/OneDrive - Worcester Polytechnic Institute (wpi.edu)/2024-JNL-NUBapat/Archives/Scatter-Plots/traindata_mintime_7states_4000_points_grid_VAE.txt")
+    data = np.array(pd.read_csv(data_path))
+    data = data[:500,:] #For 500 training examples out of 4000
+    train_loader = DataLoader(data, batch_size=batch_size, shuffle=True)
+
+    # Training loop
+    vae.train()
+    best_loss = float('inf')
+    best_epoch = -1
+
+    for epoch in range(epochs):
+        for traj in train_loader:
+            inputs = traj.float().to(device)
+            x_recon, mu, logvar = vae(inputs)
+            loss = loss_function(x_recon, inputs, mu, logvar)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        print(f"Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
+        if loss.item() < best_loss:
+            best_loss = loss.item()
+            best_epoch = epoch
+            torch.save(vae.state_dict(), "best_vae_model.pth")
+
+    print(f"Best Epoch: {best_epoch+1}, Best Loss: {best_loss:.4f}")
+
+    # Generate 1000 samples
+    generate_samples(vae, num_generated_samples)
+
+
+def generate_samples(vae, num_samples):
+    vae.eval()
+    generated_samples = []
+
+    with torch.no_grad():
+        for _ in range(num_samples):
+            z_sample = torch.randn(1, latent_size).to(device)
+            generated_sample = vae.decoder(z_sample).detach().cpu().numpy()
+            generated_samples.append(generated_sample)
+
+    # Convert to array and save to CSV
+    generated_samples = np.vstack(generated_samples)
+    output_path = "C:/Users/nubapat/OneDrive - Worcester Polytechnic Institute (wpi.edu)/2024-JNL-NUBapat/Archives/Scatter-Plots/SVAE_test_500.csv"
+    np.savetxt(output_path, generated_samples, delimiter=",")
+    print(f"Generated {num_samples} samples and saved to {output_path}")
+
+
+if __name__ == "__main__":
+    main()
