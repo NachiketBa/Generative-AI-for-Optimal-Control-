@@ -1,0 +1,166 @@
+#This file implements the Split-VAE for the minthreat problem
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
+import pandas as pd
+import numpy as np
+
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+torch.manual_seed(42)
+
+# Load the data
+data_min_noisy = np.array(pd.read_csv('Data/data_minthreat_F175_1000_7s_company_10.txt', header=None))
+data_min_noiseless = np.array(pd.read_csv('Data/data_minthreat_F175_1000_7s_ideal.txt', header=None))
+
+
+data_min_noisy_tensor = torch.tensor(data_min_noisy[:200, :], dtype=torch.float32).to(device)
+data_min_noiseless_tensor = torch.tensor(data_min_noiseless[:200, :], dtype=torch.float32).to(device)
+
+# Create labels
+labels_zero = torch.zeros(data_min_noisy_tensor.shape[0], dtype=torch.long).to(device)
+labels_ones = torch.ones(data_min_noiseless_tensor.shape[0], dtype=torch.long).to(device)
+
+# Concatenate data tensors and labels
+combined_data = torch.cat((data_min_noisy_tensor, data_min_noiseless_tensor), dim=0)
+combined_labels = torch.cat((labels_zero, labels_ones), dim=0)
+
+# Create a single TensorDataset
+combined_dataset = TensorDataset(combined_data, combined_labels)
+
+# Create DataLoader for the combined dataset
+train_loader = DataLoader(combined_dataset, batch_size=32, shuffle=True)
+
+
+# Encoder
+class Encoder(nn.Module):
+    def __init__(self, input_dim, hidden_dim1, hidden_dim2, hidden_dim3, z1_dim, z2_dim):
+        super(Encoder, self).__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim1)
+        self.fc2 = nn.Linear(hidden_dim1, hidden_dim2)
+        self.fc3 = nn.Linear(hidden_dim2, hidden_dim3)
+        self.fc21 = nn.Linear(hidden_dim3, z1_dim)
+        self.fc22 = nn.Linear(hidden_dim3, z1_dim)
+        self.fc31 = nn.Linear(hidden_dim3, z2_dim)
+        self.fc32 = nn.Linear(hidden_dim3, z2_dim)
+
+    def forward(self, x):
+        h1 = torch.relu(self.fc1(x))
+        h2 = torch.relu(self.fc2(h1))
+        h3 = torch.relu(self.fc3(h2))
+        z1_mu = self.fc21(h3)
+        z1_logvar = self.fc22(h3)
+        z2_mu = self.fc31(h3)
+        z2_logvar = self.fc32(h3)
+        return z1_mu, z1_logvar, z2_mu, z2_logvar
+
+
+# Decoder
+class Decoder(nn.Module):
+    def __init__(self, z1_dim, z2_dim, hidden_dim1, hidden_dim2, hidden_dim3, output_dim):
+        super(Decoder, self).__init__()
+        self.fc1 = nn.Linear(z1_dim + z2_dim, hidden_dim1)
+        self.fc2 = nn.Linear(hidden_dim1, hidden_dim2)
+        self.fc3 = nn.Linear(hidden_dim2, hidden_dim3)
+        self.fc4 = nn.Linear(hidden_dim3, output_dim)
+
+    def forward(self, z1, z2):
+        h1 = torch.relu(self.fc1(torch.cat([z1, z2], dim=1)))
+        h2 = torch.relu(self.fc2(h1))
+        h3 = torch.relu(self.fc3(h2))
+        x_ = self.fc4(h3)
+        return x_
+
+
+# SplitVAE
+class SplitVAE(nn.Module):
+    def __init__(self, input_dim, hidden_dim1, hidden_dim2, hidden_dim3, z1_dim, z2_dim):
+        super(SplitVAE, self).__init__()
+        self.encoder = Encoder(input_dim, hidden_dim1, hidden_dim2, hidden_dim3, z1_dim, z2_dim)
+        self.decoder = Decoder(z1_dim, z2_dim, hidden_dim1, hidden_dim2, hidden_dim3, input_dim)
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        z1_mu, z1_logvar, z2_mu, z2_logvar = self.encoder(x)
+        z1 = self.reparameterize(z1_mu, z1_logvar)
+        z2 = self.reparameterize(z2_mu, z2_logvar)
+        return self.decoder(z1, z2), z1_mu, z1_logvar, z2_mu, z2_logvar
+
+
+# loss function
+def loss_function(recon_x, x, z1_mu, z1_logvar, z2_mu, z2_logvar, labels_batch, lambda_reg):
+    # Mask for noisy data (labels == 0)
+    noisy_mask = (labels_batch == 0)
+
+    # Calculate reconstruction loss only for noisy data
+    recon_loss = F.mse_loss(recon_x[noisy_mask], x[noisy_mask], reduction='sum')
+
+    # KL divergence for z1 and z2
+    kl_loss_z1 = -0.5 * torch.sum(1 + z1_logvar - z1_mu.pow(2) - z1_logvar.exp())
+    kl_loss_z2 = -0.5 * torch.sum(1 + z2_logvar - z2_mu.pow(2) - z2_logvar.exp())
+
+    # Regularization term
+    regularization = lambda_reg * torch.sum(z1_mu.pow(2) + z1_logvar.exp() - 1 - z1_logvar) * (labels_batch == 1)
+    regularization = torch.sum(regularization)
+
+    return recon_loss + kl_loss_z1 + kl_loss_z2 + regularization
+
+
+# Sampling from latent space
+def sample_from_latent_space(model, num_samples, z1_dim, z2_dim, save_path):
+    # Ensure the model is in evaluation mode
+    model.eval()
+
+    # Generate random samples from the latent space
+    z1_samples = torch.randn(num_samples, z1_dim).to(device)
+    z2_samples = torch.randn(num_samples, z2_dim).to(device)
+
+    # Decode the latent samples
+    with torch.no_grad():
+        generated_samples = model.decoder(z1_samples, z2_samples).cpu().numpy()
+
+    # Save the generated samples to a CSV file
+    np.savetxt(save_path, generated_samples, delimiter=',')
+    print(f"Generated {num_samples} samples and saved to {save_path}")
+
+
+def main():
+    model = SplitVAE(input_dim=2057, hidden_dim1=625, hidden_dim2=400, hidden_dim3=225, z1_dim=20, z2_dim=20).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    lambda_reg = 5
+    num_epochs = 1000
+
+    # Training loop
+    for epoch in range(num_epochs):
+        model.train()
+        train_loss = 0
+        for data_batch, labels_batch in train_loader:
+            optimizer.zero_grad()
+            recon_batch, z1_mu, z1_logvar, z2_mu, z2_logvar = model(data_batch)
+            loss = loss_function(recon_batch, data_batch, z1_mu, z1_logvar, z2_mu, z2_logvar, labels_batch, lambda_reg)
+            loss.backward()
+            train_loss += loss.item()
+            optimizer.step()
+        print(f'Epoch {epoch + 1}, Loss: {train_loss / len(train_loader.dataset)}')
+
+    # Save model
+    model_path = 'splitvae_model.pth'
+    torch.save(model.state_dict(), model_path)
+
+    # Generate and save samples from the latent space
+    num_samples = 1000
+    z1_dim = 20
+    z2_dim = 20
+    save_path = 'C:/Users/nubapat/OneDrive - Worcester Polytechnic Institute (wpi.edu)/2024-JNL-NUBapat/Archives/Scatter-Plots/splitvae_1000_10_new.csv'
+    sample_from_latent_space(model, num_samples, z1_dim, z2_dim, save_path)
+
+
+if __name__ == "__main__":
+    main()
