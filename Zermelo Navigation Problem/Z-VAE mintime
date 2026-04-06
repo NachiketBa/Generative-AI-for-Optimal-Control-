@@ -1,0 +1,162 @@
+# This program implements the Z-VAE for the Zermelo Navigation problem
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import os
+import pandas as pd
+import numpy as np
+from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
+
+device = "cuda"
+
+# Hyperparameters
+hidden_size_E1 = 225
+hidden_size_E2 = 196
+hidden_size_E3 = 125
+hidden_size_E4 = 100
+hidden_size_E5 = 81
+
+hidden_size_D1 = 81
+hidden_size_D2 = 100
+hidden_size_D3 = 125
+hidden_size_D4 = 196
+hidden_size_D5 = 225
+
+latent_size = 32
+learning_rate = 1e-3
+epochs =2000
+n_features = 400
+n_discretization = 25
+my_batch_size = 32
+
+
+class VAE(nn.Module):
+    def __init__(self):
+        super(VAE, self).__init__()
+
+        # Encoder
+        self.encoder = nn.Sequential(
+            nn.Linear(n_features, hidden_size_E1),
+            nn.ReLU(),
+            nn.Linear(hidden_size_E1, hidden_size_E2),
+            nn.ReLU(),
+            nn.Linear(hidden_size_E2, hidden_size_E3),
+            nn.ReLU(),
+            nn.Linear(hidden_size_E3, hidden_size_E4),
+            nn.ReLU(),
+            nn.Linear(hidden_size_E4, hidden_size_E5),
+            nn.ReLU(),
+            nn.Linear(hidden_size_E5, latent_size * 2)  # *2 for mean and variance
+        )
+
+        # Decoder
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_size, hidden_size_D1),
+            nn.ReLU(),
+            nn.Linear(hidden_size_D1, hidden_size_D2),
+            nn.ReLU(),
+            nn.Linear(hidden_size_D2, hidden_size_D3),
+            nn.ReLU(),
+            nn.Linear(hidden_size_D3, hidden_size_D4),
+            nn.ReLU(),
+            nn.Linear(hidden_size_D4, hidden_size_D5),
+            nn.ReLU(),
+            nn.Linear(hidden_size_D5, n_features),
+        )
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def calculateHamiltonian(self, arr):
+        H = []
+        for state in range(n_discretization):
+            V = 0.05
+            hamil = (1 + arr[:, state + 75] * V * torch.cos(arr[:, state + 50])
+                     + arr[:, state + 75] * arr[:, state + 125]
+                     + arr[:, state + 100] * V * torch.sin(arr[:, state + 50])
+                     + arr[:, state + 100] * arr[:, state + 150])
+            H.append(hamil)
+        return torch.stack(H).transpose(0, 1)
+
+    def forward(self, x):
+        # Encode
+        latent_params = self.encoder(x)
+        mu, logvar = torch.chunk(latent_params, 2, dim=1)
+        z = self.reparameterize(mu, logvar)
+
+        # Decode
+        x_recon = self.decoder(z)
+        hamil = self.calculateHamiltonian(x_recon)
+        return x_recon, mu, logvar, hamil
+
+
+loss_mse = nn.MSELoss(reduction='sum').to(device)
+torch.manual_seed(42)
+
+
+def train_vae(vae, train_loader):
+    optimizer = optim.Adam(vae.parameters(), lr=learning_rate)
+    vae.train()
+    best_epoch = -1
+    best_loss = float('inf')
+
+    for epoch in range(epochs):
+        for i, traj in enumerate(train_loader):
+            inputs = traj.float().to(device)
+            x_recon, mu, logvar, hamil = vae(inputs)
+
+            loss_phy =  loss_mse(hamil, torch.zeros_like(hamil))
+            kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+            loss_recon = loss_mse(x_recon, inputs)
+            loss = 3*loss_phy + kl_loss + loss_recon
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            if loss.item() < best_loss:
+                best_loss = loss.item()
+                best_epoch = epoch
+                save_directory = 'path_to_directory'
+                os.makedirs(save_directory, exist_ok=True)
+                torch.save(vae.state_dict(), os.path.join(save_directory, 'best_zvae1_model.pth'))
+        print(f"Epoch [{epoch + 1}/{epochs}], Loss: {loss.item()}")
+        print(f"Loss_recon: {loss_recon.item()}, Loss_kl: {kl_loss.item()}, Loss_phy: {loss_phy.item()}")
+    print(f"Best epoch: {best_epoch + 1}, Best loss: {best_loss}")
+
+
+def generate_samples(vae, n_samples=1000, batch_size=32, output_path='generated_samples.csv'):
+    vae.eval()
+    all_generated_samples = []
+
+    with torch.no_grad():
+        for _ in range((n_samples + batch_size - 1) // batch_size):  # Ceiling division
+            z = torch.randn(batch_size, latent_size).to(device)
+            generated = vae.decoder(z)
+            all_generated_samples.append(generated.cpu().numpy())
+
+    all_generated_samples = np.vstack(all_generated_samples)[:n_samples]
+    np.savetxt(output_path, all_generated_samples, delimiter=',')
+    print(f"Generated {n_samples} samples and saved to {output_path}")
+
+
+def main():
+    data_mintime = np.array(pd.read_csv('C:/Users/nubapat/OneDrive - Worcester Polytechnic Institute (wpi.edu)/2024-JNL-NUBapat/Archives/Scatter-Plots/traindata_mintime_7states_4000_points_grid_VAE.txt'))
+    data_mintime = data_mintime[:500, :]  # For 500 training examples out of 4000
+    train_loader = DataLoader(data_mintime, batch_size=my_batch_size)
+    vae = VAE().to(device)
+
+    # Train the VAE
+    train_vae(vae, train_loader)
+
+    # Generate and save 1000 samples
+    trained_model_path = 'path_to_directory/best_zvae1_model.pth'
+    vae.load_state_dict(torch.load(trained_model_path))
+    generate_samples(vae, n_samples=1000, output_path='C:/Users/nubapat/OneDrive - Worcester Polytechnic Institute (wpi.edu)/2024-JNL-NUBapat/Archives/Scatter-Plots/ZVAE_test_500.csv')
+
+
+if __name__ == "__main__":
+    main()
