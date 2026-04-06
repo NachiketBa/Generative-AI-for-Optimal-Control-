@@ -1,4 +1,4 @@
-# Generative AI for RL: LTI, Minthreat, and Zermelo Navigation Problems
+# Generative AI for: LTI, Minthreat, and Zermelo Navigation Problems
 
 > VAEs and GANs trained to generate synthetic trajectory data across three optimal control problems, with physics-informed loss terms where applicable.
 
