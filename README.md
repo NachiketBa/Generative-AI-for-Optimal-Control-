@@ -26,13 +26,13 @@ Eight scripts are included across three problem domains:
 ## Problem Backgrounds
 
 ### LTI System
-A Linear Time-Invariant system where the RL agent must stabilize the system under noisy observations. Each trajectory is a 100,100-dimensional vector (100 time steps x 100 state/control features, flattened). Two datasets exist: noisy (`set09`) and noiseless (`realcase02`), and the Split-VAE handles both at once.
+A Linear Time-Invariant system where each trajectory is a 100,100-dimensional vector (100 time steps x 100 state/control features, flattened). Two datasets exist: noisy (`set09`) and noiseless (`realcase02`), and the Split-VAE handles both at once.
 
 ### Minthreat Path Planning
 A minimum-threat trajectory planning problem where an agent navigates from a start to a goal while avoiding high-threat regions. Each trajectory is a 2057-dimensional vector. Noisy and noiseless variants exist here too.
 
 ### Zermelo Navigation
-A minimum-time navigation problem where a vessel moves through a current field from `[0.0, 0.8]` to `[-0.8, -0.9]` with current speed V = 0.05. Trajectories are 400-dimensional (7 state/costate variables x 25 discretization points, plus heading angles). The physics constraint is the Pontryagin Hamiltonian, which must equal zero along optimal trajectories. The Z-VAE and ZGAN models enforce this directly in the loss.
+A minimum-time navigation problem where a vessel moves through a drift field from `[0.0, 0.8]` to `[-0.8, -0.9]` with speed V = 0.05. Trajectories are 400-dimensional (7 state/costate variables x 25 discretization points, plus heading angles). The physics constraint is the Pontryagin Hamiltonian, which must equal zero along optimal trajectories. The Z-VAE and ZGAN models enforce this directly in the loss.
 
 ---
 
